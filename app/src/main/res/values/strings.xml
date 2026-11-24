@@ -1,3 +1,3 @@
 <resources>
-    <string name="listener_description">Allows Sakura Client to control Spotify playback from its floating panel.</string>
+    <string name="app_name">Sakura Client</string>
 </resources>

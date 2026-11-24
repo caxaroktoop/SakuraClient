@@ -1,7 +1,22 @@
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
     <uses-permission android:name="android.permission.SYSTEM_ALERT_WINDOW"/>
-    <application android:theme="@style/AppTheme" android:label="Sakura Client" android:allowBackup="false">
-        <activity android:name=".MainActivity" android:exported="true">
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE"/>
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_SPECIAL_USE"/>
+    <uses-permission android:name="android.permission.POST_NOTIFICATIONS"/>
+
+    <!-- Без этого Android 11+ скрывает чужие приложения и «Minecraft не найден» -->
+    <queries>
+        <package android:name="com.mojang.minecraftpe"/>
+        <package android:name="com.spotify.music"/>
+    </queries>
+
+    <application
+        android:icon="@mipmap/ic_launcher"
+        android:roundIcon="@mipmap/ic_launcher_round"
+        android:theme="@style/AppTheme"
+        android:label="@string/app_name"
+        android:allowBackup="false">
+        <activity android:name=".MainActivity" android:exported="true" android:launchMode="singleTop">
             <intent-filter>
                 <action android:name="android.intent.action.MAIN"/>
                 <category android:name="android.intent.category.LAUNCHER"/>
@@ -9,13 +24,20 @@
         </activity>
         <service
             android:name=".SakuraMediaListener"
-            android:label="Sakura Spotify Controls"
+            android:label="Sakura Spotify"
             android:permission="android.permission.BIND_NOTIFICATION_LISTENER_SERVICE"
             android:exported="true">
             <intent-filter>
                 <action android:name="android.service.notification.NotificationListenerService"/>
             </intent-filter>
         </service>
-        <service android:name=".OverlayService" android:exported="false"/>
+        <service
+            android:name=".OverlayService"
+            android:exported="false"
+            android:foregroundServiceType="specialUse">
+            <property
+                android:name="android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE"
+                android:value="Floating panel and crosshair shown above the game"/>
+        </service>
     </application>
 </manifest>
