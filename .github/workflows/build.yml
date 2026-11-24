@@ -2,6 +2,8 @@ name: Build APK
 on:
   push:
   workflow_dispatch:
+permissions:
+  contents: write
 jobs:
   build:
     runs-on: ubuntu-24.04
@@ -19,3 +21,10 @@ jobs:
         with:
           name: SakuraClient-debug-apk
           path: app/build/outputs/apk/debug/*.apk
+      - name: Publish release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          cp app/build/outputs/apk/debug/app-debug.apk SakuraClient-v1.3.apk
+          gh release delete v1.3 --yes --cleanup-tag || true
+          gh release create v1.3 SakuraClient-v1.3.apk --title "Sakura Client v1.3" --notes "Debug APK"
