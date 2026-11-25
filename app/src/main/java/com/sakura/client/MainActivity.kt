@@ -38,6 +38,7 @@ class MainActivity : Activity() {
     private lateinit var overlayStatus: TextView
     private lateinit var listenerStatus: TextView
     private var notifStatus: TextView? = null
+    private lateinit var a11yStatus: TextView
     private lateinit var mcStatus: TextView
     private lateinit var panelBtn: LinearLayout
     private lateinit var petalsBg: PetalsView
@@ -203,6 +204,13 @@ class MainActivity : Activity() {
                 "Нужен, чтобы видеть название трека и обложку Spotify", listenerStatus) { openListenerSettings() },
             lp(MATCH, WRAP)
         )
+        setup.addView(divider(), lp(MATCH, maxOf(1, ui.dp(1))))
+        a11yStatus = statusPill()
+        setup.addView(
+            settingRow(R.drawable.ic_search, "Специальные возможности",
+                "Нужны только для модуля Zoom: включи «Sakura Zoom»", a11yStatus) { openAccessibilitySettings() },
+            lp(MATCH, WRAP)
+        )
         if (Build.VERSION.SDK_INT >= 33) {
             setup.addView(divider(), lp(MATCH, maxOf(1, ui.dp(1))))
             val np = statusPill()
@@ -220,7 +228,7 @@ class MainActivity : Activity() {
         content.addView(panelBtn, lp(MATCH, WRAP).apply { topMargin = ui.dp(10) })
 
         content.addView(
-            ui.text("Sakura Client v1.7  •  Zoom, Freelook и Replay — в разработке", 11f, Palette.muted)
+            ui.text("Sakura Client v1.8  •  Freelook и Replay — в разработке", 11f, Palette.muted)
                 .apply { gravity = Gravity.CENTER },
             lp(MATCH, WRAP).apply { topMargin = ui.dp(26) }
         )
@@ -258,30 +266,37 @@ class MainActivity : Activity() {
     // ---------------- вкладка «Модули» ----------------
 
     private fun modulesPage(): View {
-        val (scroll, content) = page()
-        content.addView(ui.text("Модули", 20f, Palette.text, true), lp(WRAP, WRAP).apply { topMargin = ui.dp(6) })
-        content.addView(
-            ui.text("Включай нужное. Шестерёнка открывает настройки модуля. Всё работает поверх игры, пока включена панель.",
-                12f, Palette.muted).apply { setLineSpacing(0f, 1.1f) },
-            lp(MATCH, WRAP).apply { topMargin = ui.dp(6) }
-        )
         modulesBox = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
-        content.addView(modulesBox, lp(MATCH, WRAP).apply { topMargin = ui.dp(12) })
         renderModules()
-        return scroll
+        return modulesBox
     }
 
     private fun renderModules() {
         modulesBox.removeAllViews()
-        addModulesWindow(this, ui, prefs, modulesBox,
+        val wide = resources.displayMetrics.widthPixels >= ui.dp(560)
+        val env = GuiEnv(
+            c = this, ui = ui, prefs = prefs, wide = wide, showSearch = true, innerScroll = true,
+            onClose = null,
             onEditHud = {
                 if (OverlayService.running) {
                     prefs.edit().putBoolean("hud_edit", true).apply()
                     toast("Перетащи виджеты в игре и нажми «Готово»")
                 } else toast("Сначала включи панель кнопкой «Играть»")
             },
-            extra = { key, box -> if (key == "ping") addPingField(box) }
-        ) { renderModules() }
+            dragTitle = null,
+            musicContent = { box ->
+                val pv = PlayerView(this, ui, 56f) { openApp(Launcher.SPOTIFY, "Spotify") }
+                box.addView(pv, lp(MATCH, WRAP))
+                pv.refresh()
+            },
+            settingsContent = { box, _ -> addPingField(box) },
+            moduleExtra = { key, box -> if (key == "hud_ping") addPingField(box) }
+        )
+        val gui = ClickGuiView(env)
+        modulesBox.setPadding(ui.dp(12), ui.dp(8), ui.dp(12), ui.dp(12))
+        gui.background = ui.rounded(Gui.bg, 18f, Gui.border, 1.2f)
+        clipRounded(gui, ui, 18f)
+        modulesBox.addView(gui, lp(MATCH, MATCH))
     }
 
     /** Поле для адреса сервера, до которого HUD мерит пинг. */
@@ -593,6 +608,7 @@ class MainActivity : Activity() {
     private fun refresh() {
         setStatus(overlayStatus, Settings.canDrawOverlays(this), "Вкл", "Выкл")
         setStatus(listenerStatus, SpotifyBridge.listenerEnabled(this), "Вкл", "Выкл")
+        setStatus(a11yStatus, SakuraAccessibility.instance != null, "Вкл", "Выкл")
         notifStatus?.let {
             val granted = Build.VERSION.SDK_INT < 33 ||
                 checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS) == PackageManager.PERMISSION_GRANTED
@@ -662,6 +678,14 @@ class MainActivity : Activity() {
             startActivity(Intent(Settings.ACTION_NOTIFICATION_LISTENER_SETTINGS))
         } catch (e: Exception) {
             toast("Открой: Настройки → Уведомления → Доступ к уведомлениям")
+        }
+    }
+
+    private fun openAccessibilitySettings() {
+        try {
+            startActivity(Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS))
+        } catch (e: Exception) {
+            toast("Открой: Настройки → Специальные возможности")
         }
     }
 

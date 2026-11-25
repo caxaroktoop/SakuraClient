@@ -41,6 +41,7 @@ class PetalField(private val density: Float) {
     private var h = 0f
     private var time = 0f
     var target = 18
+    var alphaMul = 1f
 
     private val colors = intArrayOf(
         Color.rgb(255, 183, 209), Color.rgb(255, 143, 184), Color.rgb(255, 214, 230)
@@ -87,7 +88,7 @@ class PetalField(private val density: Float) {
     fun draw(canvas: Canvas) {
         for (p in petals) {
             paint.color = p.color
-            paint.alpha = p.alpha
+            paint.alpha = (p.alpha * alphaMul).toInt()
             var fx = cos(p.flip)
             if (abs(fx) < 0.15f) fx = if (fx < 0f) -0.15f else 0.15f
             val sc = p.s * density
@@ -120,6 +121,11 @@ class PetalsView(ctx: Context) : View(ctx) {
     }
 
     init { field.target = 16 }
+
+    fun configure(count: Int, alpha: Float) {
+        field.target = count
+        field.alphaMul = alpha
+    }
 
     fun start() {
         if (running) return

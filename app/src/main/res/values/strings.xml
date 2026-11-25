@@ -1,3 +1,5 @@
 <resources>
     <string name="app_name">Sakura Client</string>
+    <string name="a11y_label">Sakura Zoom</string>
+    <string name="a11y_desc">Нужна только для модуля Zoom: увеличивает экран, пока модуль включён. Sakura не читает содержимое экрана.</string>
 </resources>

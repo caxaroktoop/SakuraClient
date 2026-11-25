@@ -44,14 +44,11 @@ class OverlayService : Service() {
     private var bubbleParams: WindowManager.LayoutParams? = null
     private var panel: FrameLayout? = null
     private var panelParams: WindowManager.LayoutParams? = null
-    private var panelUi: Ui? = null
-    private var glass: GlassDrawable? = null
-    private var body: LinearLayout? = null
-    private var subtitle: TextView? = null
+    private var fxParams: WindowManager.LayoutParams? = null
+    private var panelBg: GradientDrawable? = null
+    private var petalsView: PetalsView? = null
     private var player: PlayerView? = null
-    private var page = PAGE_PLAYER
     private var shown = false
-    private var startedAt = 0L
 
     private val prefListener = SharedPreferences.OnSharedPreferenceChangeListener { _, key ->
         handler.post { onPrefChanged(key) }
@@ -60,7 +57,6 @@ class OverlayService : Service() {
     private val ticker = object : Runnable {
         override fun run() {
             player?.refresh()
-            subtitle?.text = "В игре " + elapsed()
             handler.postDelayed(this, 1000)
         }
     }
@@ -68,15 +64,6 @@ class OverlayService : Service() {
     private fun prefs(): SharedPreferences = getSharedPreferences("sakura_settings", MODE_PRIVATE)
     private fun scale() = prefs().getInt("scale", 100).coerceIn(80, 140) / 100f
     private fun opacity() = prefs().getInt("opacity", 92).coerceIn(35, 100)
-
-    private fun elapsed(): String {
-        val s = (SystemClock.elapsedRealtime() - startedAt) / 1000
-        val h = s / 3600
-        val m = (s % 3600) / 60
-        val sec = s % 60
-        return if (h > 0) String.format(Locale.US, "%d:%02d:%02d", h, m, sec)
-        else String.format(Locale.US, "%02d:%02d", m, sec)
-    }
 
     override fun onCreate() {
         super.onCreate()
@@ -164,13 +151,14 @@ class OverlayService : Service() {
         }
         shown = true
         running = true
-        startedAt = SystemClock.elapsedRealtime()
         val ui = Ui(this)
 
         // нижний слой: затемнение, лепестки, прицел
         val f = FxView(this, prefs())
         fx = f
-        wm.addView(f, overlayParams(WindowManager.LayoutParams.MATCH_PARENT, WindowManager.LayoutParams.MATCH_PARENT, false))
+        fxParams = overlayParams(WindowManager.LayoutParams.MATCH_PARENT, WindowManager.LayoutParams.MATCH_PARENT, false)
+        wm.addView(f, fxParams)
+        applyScreenFlags()
 
         // HUD сверху экрана
         prefs().edit().putBoolean("hud_edit", false).apply()
@@ -220,76 +208,96 @@ class OverlayService : Service() {
             hud?.setEditing(edit)
             return
         }
+        if (key == null || key == "bright_on" || key == "awake_on") applyScreenFlags()
         if (key != null && key.startsWith("hud_")) hud?.apply()
     }
 
-    // ---------- панель ----------
+    /** Максимальная яркость и «не гасить экран» реализованы свойствами окна-слоя. */
+    private fun applyScreenFlags() {
+        val p = fxParams ?: return
+        val v = fx ?: return
+        p.screenBrightness = if (prefs().getBoolean("bright_on", false)) 1f
+        else WindowManager.LayoutParams.BRIGHTNESS_OVERRIDE_NONE
+        p.flags = if (prefs().getBoolean("awake_on", false)) p.flags or WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON
+        else p.flags and WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON.inv()
+        try { wm.updateViewLayout(v, p) } catch (_: Exception) {}
+    }
+
+    // ---------- окно мод-меню ----------
 
     private fun showPanel() {
         if (panel != null) return
         val ui = Ui(this, scale())
-        panelUi = ui
+        val screen = screenSize()
+        val w = minOf(screen.x - ui.dp(24), ui.dp(760))
+        val wide = w >= ui.dp(520)
+        val h = minOf(screen.y - ui.dp(24), if (wide) ui.dp(400) else ui.dp(580))
 
         val root = FrameLayout(this)
-        val g = GlassDrawable(ui, opacity())
-        glass = g
-        root.background = g
-        root.clipToOutline = true
-        root.outlineProvider = object : ViewOutlineProvider() {
-            override fun getOutline(view: View, outline: android.graphics.Outline) {
-                outline.setRoundRect(0, 0, view.width, view.height, ui.fdp(24f))
-            }
-        }
+        val bg = ui.rounded(Gui.bg, 18f, Gui.border, 1.2f)
+        bg.alpha = opacity() * 255 / 100
+        panelBg = bg
+        root.background = bg
+        clipRounded(root, ui, 18f)
 
-        val col = LinearLayout(this).apply {
-            orientation = LinearLayout.VERTICAL
-            setPadding(ui.dp(14), ui.dp(12), ui.dp(14), ui.dp(14))
-        }
-        root.addView(col, FrameLayout.LayoutParams(MATCH, WRAP))
-        col.addView(buildHeader(ui), lp(MATCH, WRAP))
-        col.addView(buildTabs(ui), lp(MATCH, WRAP).apply { topMargin = ui.dp(10) })
+        val gui = ClickGuiView(
+            GuiEnv(
+                c = this, ui = ui, prefs = prefs(), wide = wide, showSearch = false, innerScroll = true,
+                onClose = { hidePanel() },
+                onEditHud = { prefs().edit().putBoolean("hud_edit", true).apply() },
+                dragTitle = { v ->
+                    v.setOnTouchListener(
+                        DragListener(
+                            this, wm, { panel }, { panelParams }, { screenSize() },
+                            onClick = null,
+                            onMoved = { x, y -> prefs().edit().putInt("gui_x", x).putInt("gui_y", y).apply() }
+                        )
+                    )
+                },
+                musicContent = { box -> buildPlayer(box, ui) },
+                settingsContent = { box, _ -> buildSettings(box, ui) },
+                moduleExtra = { key, box ->
+                    if (key == "hud_ping") {
+                        box.addView(
+                            ui.text("Адрес сервера для пинга меняется в приложении: Модули → Пинг.", 11f, Gui.muted),
+                            lp(MATCH, WRAP).apply { topMargin = ui.dp(10) }
+                        )
+                    }
+                }
+            )
+        )
+        root.addView(gui, FrameLayout.LayoutParams(MATCH, MATCH))
 
-        val maxBody = maxOf(ui.dp(120), screenSize().y - ui.dp(170))
-        val scroll = MaxHeightScrollView(this, maxBody).apply {
-            isVerticalScrollBarEnabled = false
-            overScrollMode = View.OVER_SCROLL_NEVER
-        }
-        val b = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
-        scroll.addView(b, FrameLayout.LayoutParams(MATCH, WRAP))
-        body = b
-        col.addView(scroll, lp(MATCH, WRAP).apply { topMargin = ui.dp(12) })
+        // лепестки внутри окна (касания не перехватывают)
+        val pv = PetalsView(this).apply { configure(10, 0.55f) }
+        petalsView = pv
+        root.addView(pv, FrameLayout.LayoutParams(MATCH, MATCH))
+        pv.start()
 
         panel = root
-        fillBody()
-
-        val p = panelParams ?: overlayParams(ui.dp(290), WindowManager.LayoutParams.WRAP_CONTENT, true).apply {
-            x = prefs().getInt("panel_x", Ui(this@OverlayService).dp(70))
-            y = prefs().getInt("panel_y", Ui(this@OverlayService).dp(40))
-        }
-        p.width = ui.dp(290)
-        p.height = WindowManager.LayoutParams.WRAP_CONTENT
+        val p = panelParams ?: overlayParams(w, h, true)
+        p.width = w
+        p.height = h
+        p.x = prefs().getInt("gui_x", (screen.x - w) / 2)
+        p.y = prefs().getInt("gui_y", (screen.y - h) / 2)
         panelParams = p
         wm.addView(root, p)
         root.post { clamp(panel, panelParams) }
     }
 
     private fun removePanelView() {
+        petalsView?.stop()
+        petalsView = null
         panel?.let { try { wm.removeView(it) } catch (_: Exception) {} }
         panel = null
+        panelParams = null
         player = null
-        body = null
-        subtitle = null
-        glass = null
+        panelBg = null
     }
 
     private fun hidePanel() {
         removePanelView()
         prefs().edit().putBoolean("panel_open", false).apply()
-    }
-
-    private fun rebuildPanel() {
-        removePanelView()
-        showPanel()
     }
 
     private fun clamp(view: View?, p: WindowManager.LayoutParams?) {
@@ -300,80 +308,7 @@ class OverlayService : Service() {
         try { wm.updateViewLayout(view, p) } catch (_: Exception) {}
     }
 
-    private fun buildHeader(ui: Ui): LinearLayout {
-        val h = LinearLayout(this).apply {
-            orientation = LinearLayout.HORIZONTAL
-            gravity = Gravity.CENTER_VERTICAL
-        }
-        h.addView(ui.icon(R.drawable.ic_sakura), lp(ui.dp(30), ui.dp(30)).apply { rightMargin = ui.dp(10) })
-        val titles = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
-        titles.addView(ui.text("Sakura", 16f, Palette.text, true), lp(WRAP, WRAP))
-        val sub = ui.text("В игре " + elapsed(), 11f, Palette.pink)
-        subtitle = sub
-        titles.addView(sub, lp(WRAP, WRAP).apply { topMargin = ui.dp(3) })
-        h.addView(titles, lp(0, WRAP, 1f))
-        h.addView(
-            ui.iconButton(R.drawable.ic_close, 34f, 16f, Palette.muted) { hidePanel() },
-            lp(ui.dp(34), ui.dp(34))
-        )
-        h.setOnTouchListener(
-            DragListener(
-                this, wm, { panel }, { panelParams }, { screenSize() },
-                onClick = null,
-                onMoved = { x, y -> prefs().edit().putInt("panel_x", x).putInt("panel_y", y).apply() }
-            )
-        )
-        return h
-    }
-
-    private fun buildTabs(ui: Ui): LinearLayout {
-        val bar = LinearLayout(this).apply {
-            orientation = LinearLayout.HORIZONTAL
-            setPadding(ui.dp(3), ui.dp(3), ui.dp(3), ui.dp(3))
-            background = ui.rounded(Color.argb(110, 0, 0, 0), 14f)
-        }
-        val tabs = listOf(
-            Triple(PAGE_PLAYER, R.drawable.ic_music, "Плеер"),
-            Triple(PAGE_MODULES, R.drawable.ic_grid, "Модули"),
-            Triple(PAGE_VIEW, R.drawable.ic_tune, "Вид")
-        )
-        for ((id, ic, label) in tabs) {
-            val sel = id == page
-            val fg = if (sel) Palette.onPink else Palette.muted
-            val tab = LinearLayout(this).apply {
-                orientation = LinearLayout.HORIZONTAL
-                gravity = Gravity.CENTER
-                setPadding(0, ui.dp(8), 0, ui.dp(8))
-                if (sel) background = ui.gradient(Palette.pink, Palette.pinkDeep, 11f, GradientDrawable.Orientation.LEFT_RIGHT)
-                isClickable = true
-                setOnClickListener {
-                    if (page != id) {
-                        page = id
-                        rebuildPanel()
-                    }
-                }
-            }
-            tab.addView(ui.icon(ic, fg), lp(ui.dp(14), ui.dp(14)).apply { rightMargin = ui.dp(5) })
-            tab.addView(ui.text(label, 12f, fg, true))
-            bar.addView(tab, lp(0, WRAP, 1f))
-        }
-        return bar
-    }
-
-    private fun fillBody() {
-        val b = body ?: return
-        val ui = panelUi ?: return
-        b.removeAllViews()
-        player = null
-        when (page) {
-            PAGE_PLAYER -> buildPlayerPage(b, ui)
-            PAGE_MODULES -> buildModulesPage(b, ui)
-            else -> buildViewPage(b, ui)
-        }
-        panel?.post { clamp(panel, panelParams) }
-    }
-
-    private fun buildPlayerPage(b: LinearLayout, ui: Ui) {
+    private fun buildPlayer(b: LinearLayout, ui: Ui) {
         val pv = PlayerView(this, ui, 56f) { openApp(Launcher.SPOTIFY, "Spotify") }
         player = pv
         b.addView(pv, lp(MATCH, WRAP))
@@ -384,29 +319,19 @@ class OverlayService : Service() {
         )
     }
 
-    private fun buildModulesPage(b: LinearLayout, ui: Ui) {
-        addModulesWindow(this, ui, prefs(), b,
-            onEditHud = { prefs().edit().putBoolean("hud_edit", true).apply() },
-            extra = { key, box ->
-                if (key == "ping") {
-                    box.addView(
-                        ui.text("Адрес сервера для пинга меняется в приложении: Модули, Пинг.", 11f, Palette.muted),
-                        lp(MATCH, WRAP).apply { topMargin = ui.dp(10) }
-                    )
-                }
-            }
-        ) { fillBody() }
-    }
-
-    private fun buildViewPage(b: LinearLayout, ui: Ui) {
-        addSliderRow(this, ui, b, "Прозрачность панели", 35, 100, opacity(), "%",
+    private fun buildSettings(b: LinearLayout, ui: Ui) {
+        addSliderRow(this, ui, b, "Прозрачность окна", 35, 100, opacity(), "%",
             onChange = { v ->
                 prefs().edit().putInt("opacity", v).apply()
-                glass?.setPanelOpacity(v)
+                panelBg?.alpha = v * 255 / 100
             }, onDone = {})
-        addSliderRow(this, ui, b, "Размер панели", 80, 140, (scale() * 100).toInt(), "%",
+        addSliderRow(this, ui, b, "Размер окна", 80, 140, (scale() * 100).toInt(), "%",
             onChange = { v -> prefs().edit().putInt("scale", v).apply() },
-            onDone = { rebuildPanel() })
+            onDone = {
+                removePanelView()
+                prefs().edit().remove("gui_x").remove("gui_y").apply()
+                showPanel()
+            })
         b.addView(
             ui.pill("Выключить Sakura", STYLE_DANGER, R.drawable.ic_close) { stopSelf() },
             lp(MATCH, WRAP).apply { topMargin = ui.dp(16) }
@@ -429,6 +354,7 @@ class OverlayService : Service() {
         handler.removeCallbacks(ticker)
         try { prefs().unregisterOnSharedPreferenceChangeListener(prefListener) } catch (_: Exception) {}
         removePanelView()
+        if (SakuraAccessibility.instance != null) prefs().edit().putBoolean("zoom_on", false).apply()
         hud?.destroy()
         hud = null
         try { bubble?.let { wm.removeView(it) } } catch (_: Exception) {}
@@ -448,9 +374,6 @@ class OverlayService : Service() {
         const val ACTION_STOP = "com.sakura.client.STOP"
         private const val CHANNEL = "sakura_overlay"
         private const val NOTIF_ID = 1301
-        private const val PAGE_PLAYER = 0
-        private const val PAGE_MODULES = 1
-        private const val PAGE_VIEW = 2
 
         @Volatile
         var running = false
