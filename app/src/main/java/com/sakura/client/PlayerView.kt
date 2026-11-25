@@ -1,7 +1,7 @@
 package com.sakura.client
 
 import android.content.Context
-import android.graphics.Color
+import android.os.SystemClock
 import android.text.TextUtils
 import android.view.Gravity
 import android.view.View
@@ -24,6 +24,9 @@ class PlayerView(
     private val playBtn: ImageView
     private val openBtn: LinearLayout
     private var lastKey: String? = null
+    private var shownPlaying = false
+    private var pendingPlaying: Boolean? = null
+    private var pendingUntil = 0L
 
     init {
         orientation = VERTICAL
@@ -53,7 +56,7 @@ class PlayerView(
             SpotifyBridge.previous(c); later()
         }
         playBtn = ui.iconButton(R.drawable.ic_play, 52f, 26f, Palette.onPink, ui.circle(Palette.pink)) {
-            SpotifyBridge.playPause(c); later()
+            togglePlay()
         }
         val next = ui.iconButton(R.drawable.ic_next, 44f, 24f, Palette.text) {
             SpotifyBridge.next(c); later()
@@ -65,6 +68,23 @@ class PlayerView(
 
         openBtn = ui.pill("Открыть Spotify", STYLE_GHOST, R.drawable.ic_music) { onOpenSpotify() }
         addView(openBtn, lp(MATCH, WRAP).apply { topMargin = ui.dp(8) })
+    }
+
+    /** Иконка меняется сразу, не дожидаясь ответа Spotify; потом сверяется с реальным состоянием. */
+    private fun togglePlay() {
+        val s = SpotifyBridge.snapshot(c)
+        val known = s.listenerOk && s.active
+        val want = !(pendingPlaying ?: shownPlaying)
+        pendingPlaying = want
+        pendingUntil = SystemClock.uptimeMillis() + 2500
+        shownPlaying = want
+        playBtn.setImageResource(if (want) R.drawable.ic_pause else R.drawable.ic_play)
+        SpotifyBridge.setPlaying(c, want, known)
+        postDelayed({ refresh() }, 350)
+        postDelayed({
+            if (known) SpotifyBridge.ensurePlaying(c, want)
+            refresh()
+        }, 1000)
     }
 
     private fun later() {
@@ -100,7 +120,16 @@ class PlayerView(
             }
         }
         progress.fraction = s.fraction
-        playBtn.setImageResource(if (s.playing) R.drawable.ic_pause else R.drawable.ic_play)
+        var playing = s.playing
+        val pend = pendingPlaying
+        if (pend != null) {
+            if (SystemClock.uptimeMillis() > pendingUntil) pendingPlaying = null
+            else if (s.listenerOk && s.active && s.playing == pend) pendingPlaying = null
+            else playing = pend
+        }
+        if (!(s.listenerOk && s.active) && pendingPlaying == null) playing = shownPlaying
+        shownPlaying = playing
+        playBtn.setImageResource(if (playing) R.drawable.ic_pause else R.drawable.ic_play)
         openBtn.visibility = if (s.active) View.GONE else View.VISIBLE
     }
 }

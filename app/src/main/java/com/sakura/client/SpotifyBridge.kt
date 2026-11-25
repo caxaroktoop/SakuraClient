@@ -72,12 +72,27 @@ object SpotifyBridge {
         )
     }
 
-    fun playPause(ctx: Context) {
+    /**
+     * Включает или ставит на паузу. Команды «play»/«pause» идемпотентны: повторная отправка ничего не ломает.
+     * known=false: состояние неизвестно (нет доступа к уведомлениям), тогда шлём обычный «play/pause».
+     */
+    fun setPlaying(ctx: Context, want: Boolean, known: Boolean = true) {
         val c = controller(ctx)
         if (c != null) {
-            if (c.playbackState?.state == PlaybackState.STATE_PLAYING) c.transportControls.pause()
-            else c.transportControls.play()
-        } else sendKey(ctx, KeyEvent.KEYCODE_MEDIA_PLAY_PAUSE)
+            if (want) c.transportControls.play() else c.transportControls.pause()
+        } else if (known) {
+            sendKey(ctx, if (want) KeyEvent.KEYCODE_MEDIA_PLAY else KeyEvent.KEYCODE_MEDIA_PAUSE)
+        } else {
+            sendKey(ctx, KeyEvent.KEYCODE_MEDIA_PLAY_PAUSE)
+        }
+    }
+
+    /** Проверка после нажатия: если Spotify не отреагировал на команду сессии, шлём медиа-клавишу. */
+    fun ensurePlaying(ctx: Context, want: Boolean) {
+        val s = snapshot(ctx)
+        if (s.active && s.playing != want) {
+            sendKey(ctx, if (want) KeyEvent.KEYCODE_MEDIA_PLAY else KeyEvent.KEYCODE_MEDIA_PAUSE)
+        }
     }
 
     fun next(ctx: Context) {

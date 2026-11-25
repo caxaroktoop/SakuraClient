@@ -56,7 +56,10 @@ fun addChips(
  * Настройки включённых модулей: добавляет под плитками блоки с ползунками и выбором стиля.
  * rerender вызывается, когда нужно перерисовать блок (например, после выбора стиля).
  */
-fun addModuleSettings(c: Context, ui: Ui, prefs: SharedPreferences, parent: LinearLayout, rerender: () -> Unit) {
+fun addModuleSettings(
+    c: Context, ui: Ui, prefs: SharedPreferences, parent: LinearLayout,
+    onEditHud: () -> Unit, rerender: () -> Unit
+) {
     fun section(title: String): LinearLayout {
         val box = LinearLayout(c).apply {
             orientation = LinearLayout.VERTICAL
@@ -101,19 +104,24 @@ fun addModuleSettings(c: Context, ui: Ui, prefs: SharedPreferences, parent: Line
 
     if (prefs.getBoolean("hud_on", false)) {
         val s = section("HUD")
-        val keys = listOf("time", "timer", "batt", "ping", "ram", "net")
-        val defaults = listOf(true, true, true, true, false, false)
-        addChips(c, ui, s, listOf("Время", "Таймер", "Заряд", "Пинг", "ОЗУ", "Сеть"), 3,
-            { prefs.getBoolean("hud_" + keys[it], defaults[it]) },
+        addChips(c, ui, s, HudKeys.labels, 4,
+            { prefs.getBoolean("hud_" + HudKeys.keys[it], HudKeys.defaults[it]) },
             { i ->
-                val k = "hud_" + keys[i]
-                prefs.edit().putBoolean(k, !prefs.getBoolean(k, defaults[i])).apply()
+                val k = "hud_" + HudKeys.keys[i]
+                prefs.edit().putBoolean(k, !prefs.getBoolean(k, HudKeys.defaults[i])).apply()
                 rerender()
             })
-        s.addView(ui.text("Положение", 12f, Palette.muted), lp(WRAP, WRAP).apply { topMargin = ui.dp(12) })
-        addChips(c, ui, s, listOf("Слева", "По центру", "Справа"), 3,
-            { it == prefs.getInt("hud_pos", 1) },
-            { prefs.edit().putInt("hud_pos", it).apply(); rerender() })
+        s.addView(
+            ui.text(
+                "CPS считает касания экрана (экспериментально, на некоторых телефонах не работает). " +
+                    "Пинг и сеть — замеры сети, а не данные игры.", 11f, Palette.muted
+            ).apply { setLineSpacing(0f, 1.1f) },
+            lp(MATCH, WRAP).apply { topMargin = ui.dp(10) }
+        )
+        s.addView(
+            ui.pill("Расположить виджеты", STYLE_PRIMARY, R.drawable.ic_grid) { onEditHud() },
+            lp(MATCH, WRAP).apply { topMargin = ui.dp(12) }
+        )
     }
 
     if (prefs.getBoolean("dim_on", false)) {

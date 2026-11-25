@@ -173,7 +173,11 @@ class OverlayService : Service() {
         wm.addView(f, overlayParams(WindowManager.LayoutParams.MATCH_PARENT, WindowManager.LayoutParams.MATCH_PARENT, false))
 
         // HUD сверху экрана
-        hud = HudWindow(this, wm, prefs()) { w, h -> overlayParams(w, h, false) }.also { it.apply() }
+        prefs().edit().putBoolean("hud_edit", false).apply()
+        hud = HudWindow(
+            this, wm, prefs(),
+            onEditDone = { prefs().edit().putBoolean("hud_edit", false).apply() }
+        ) { w, h -> overlayParams(w, h, false) }.also { it.apply() }
 
         // плавающая кнопка
         val b = ImageView(this).apply {
@@ -210,6 +214,12 @@ class OverlayService : Service() {
     private fun onPrefChanged(key: String?) {
         if (!shown) return
         fx?.reload()
+        if (key == "hud_edit") {
+            val edit = prefs().getBoolean("hud_edit", false)
+            if (edit) removePanelView() else if (prefs().getBoolean("panel_open", true)) showPanel()
+            hud?.setEditing(edit)
+            return
+        }
         if (key != null && key.startsWith("hud_")) hud?.apply()
         if (key != null && key.endsWith("_on") && page == PAGE_MODULES && panel != null) fillBody()
     }
@@ -390,7 +400,7 @@ class OverlayService : Service() {
             }
             b.addView(row, lp(MATCH, WRAP).apply { if (r > 0) topMargin = ui.dp(8) })
         }
-        addModuleSettings(this, ui, p, b) { fillBody() }
+        addModuleSettings(this, ui, p, b, { prefs().edit().putBoolean("hud_edit", true).apply() }) { fillBody() }
     }
 
     private fun buildViewPage(b: LinearLayout, ui: Ui) {

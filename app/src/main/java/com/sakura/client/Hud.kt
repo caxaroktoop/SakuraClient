@@ -12,6 +12,8 @@ import android.os.Handler
 import android.os.Looper
 import android.os.SystemClock
 import android.view.Gravity
+import android.view.MotionEvent
+import android.view.View
 import android.view.WindowManager
 import android.widget.FrameLayout
 import android.widget.LinearLayout
@@ -19,25 +21,44 @@ import android.widget.TextView
 import java.net.InetSocketAddress
 import java.net.Socket
 import java.text.SimpleDateFormat
+import java.util.ArrayDeque
 import java.util.Date
 import java.util.Locale
 
-/** Капсула с игровой информацией сверху экрана: время, таймер, батарея, пинг, ОЗУ, сеть. */
+/** Список виджетов HUD: ключ в настройках, подпись, значок и включён ли по умолчанию. */
+object HudKeys {
+    val keys = listOf("time", "timer", "batt", "ping", "cps", "ram", "net")
+    val labels = listOf("Время", "Таймер", "Заряд", "Пинг", "CPS", "ОЗУ", "Сеть")
+    val defaults = listOf(true, true, true, true, false, false, false)
+    val icons = listOf(
+        R.drawable.ic_clock, R.drawable.ic_timer, R.drawable.ic_battery, R.drawable.ic_wifi,
+        R.drawable.ic_speed, R.drawable.ic_memory, R.drawable.ic_download
+    )
+}
+
+/**
+ * HUD в стиле игровых клиентов: отдельные карточки-виджеты (время, таймер, заряд, пинг, CPS, ОЗУ, сеть).
+ * Режим редактирования: слой перехватывает касания, виджеты можно перетащить, позиции запоминаются.
+ */
 class HudWindow(
     private val ctx: Context,
     private val wm: WindowManager,
     private val prefs: SharedPreferences,
+    private val onEditDone: () -> Unit,
     private val newParams: (Int, Int) -> WindowManager.LayoutParams
 ) {
-    private class Chip(val key: String, val tv: TextView)
+    private class Widget(val key: String, val tv: TextView)
 
     private val handler = Handler(Looper.getMainLooper())
     private val ui = Ui(ctx)
     private val startedAt = SystemClock.elapsedRealtime()
-    private var root: FrameLayout? = null
-    private val chips = ArrayList<Chip>()
+    private var layer: FrameLayout? = null
+    private var probe: View? = null
+    private val widgets = ArrayList<Widget>()
+    private val taps = ArrayDeque<Long>()
     private var lastRx = -1L
     private val timeFmt = SimpleDateFormat("HH:mm", Locale.getDefault())
+    private var editing = false
 
     @Volatile private var pingMs = -1
     @Volatile private var pingRun = false
@@ -50,86 +71,171 @@ class HudWindow(
         }
     }
 
-    /** Пересобирает капсулу по текущим настройкам (или убирает, если модуль выключен). */
+    /** Пересобирает слой по текущим настройкам (или убирает, если модуль выключен). */
     fun apply() {
         remove()
-        if (!prefs.getBoolean("hud_on", false)) return
-        add()
+        if (prefs.getBoolean("hud_on", false)) add()
     }
 
-    fun destroy() = remove()
+    fun setEditing(on: Boolean) {
+        editing = on
+        apply()
+    }
+
+    fun destroy() {
+        editing = false
+        remove()
+    }
+
+    private fun enabledIndexes(): List<Int> = HudKeys.keys.indices.filter {
+        prefs.getBoolean("hud_" + HudKeys.keys[it], HudKeys.defaults[it])
+    }
 
     private fun add() {
-        val defs = listOf(
-            Triple("time", R.drawable.ic_clock, true),
-            Triple("timer", R.drawable.ic_timer, true),
-            Triple("batt", R.drawable.ic_battery, true),
-            Triple("ping", R.drawable.ic_wifi, true),
-            Triple("ram", R.drawable.ic_memory, false),
-            Triple("net", R.drawable.ic_download, false)
-        )
-        val capsule = LinearLayout(ctx).apply {
-            orientation = LinearLayout.HORIZONTAL
-            gravity = Gravity.CENTER_VERTICAL
-            setPadding(ui.dp(14), ui.dp(7), ui.dp(14), ui.dp(7))
-            background = ui.rounded(Color.argb(215, 22, 13, 30), 18f, Palette.stroke)
-        }
-        for ((key, icon, dflt) in defs) {
-            if (!prefs.getBoolean("hud_$key", dflt)) continue
-            val tv = ui.text("--", 12f, Palette.text, true)
-            val item = LinearLayout(ctx).apply {
-                orientation = LinearLayout.HORIZONTAL
-                gravity = Gravity.CENTER_VERTICAL
-            }
-            item.addView(ui.icon(icon, Palette.pink), lp(ui.dp(13), ui.dp(13)).apply { rightMargin = ui.dp(5) })
-            item.addView(tv, lp(WRAP, WRAP))
-            capsule.addView(item, lp(WRAP, WRAP).apply { if (capsule.childCount > 0) leftMargin = ui.dp(12) })
-            chips.add(Chip(key, tv))
-        }
-        if (chips.isEmpty()) return
+        val enabled = enabledIndexes()
+        if (enabled.isEmpty() && !editing) return
 
-        val frame = FrameLayout(ctx).apply { setPadding(ui.dp(14), ui.dp(8), ui.dp(14), ui.dp(8)) }
-        frame.addView(capsule, FrameLayout.LayoutParams(WRAP, WRAP))
-        val p = newParams(WindowManager.LayoutParams.WRAP_CONTENT, WindowManager.LayoutParams.WRAP_CONTENT).apply {
-            gravity = Gravity.TOP or when (prefs.getInt("hud_pos", 1)) {
-                0 -> Gravity.START
-                2 -> Gravity.END
-                else -> Gravity.CENTER_HORIZONTAL
-            }
-            x = 0
-            y = 0
+        val root = FrameLayout(ctx)
+        enabled.forEachIndexed { order, i -> addWidget(root, i, order) }
+        if (editing) {
+            root.setBackgroundColor(Color.argb(95, 0, 0, 0))
+            addHint(root)
         }
+
+        val p = newParams(WindowManager.LayoutParams.MATCH_PARENT, WindowManager.LayoutParams.MATCH_PARENT)
+        if (editing) p.flags = p.flags and WindowManager.LayoutParams.FLAG_NOT_TOUCHABLE.inv()
         try {
-            wm.addView(frame, p)
+            wm.addView(root, p)
         } catch (e: Exception) {
-            chips.clear()
+            widgets.clear()
             return
         }
-        root = frame
+        layer = root
+
+        if (enabled.any { HudKeys.keys[it] == "cps" }) addProbe()
+        if (enabled.any { HudKeys.keys[it] == "ping" }) startPing()
         lastRx = -1L
-        if (chips.any { it.key == "ping" }) startPing()
         handler.removeCallbacks(ticker)
         handler.post(ticker)
     }
 
+    private fun cardBg() = ui.rounded(
+        Color.argb(205, 22, 13, 30), 12f,
+        if (editing) Palette.pink else Palette.stroke, if (editing) 1.5f else 1f
+    )
+
+    private fun addWidget(root: FrameLayout, idx: Int, order: Int) {
+        val key = HudKeys.keys[idx]
+        val tv = ui.text("--", 12.5f, Palette.text, true)
+        val card = LinearLayout(ctx).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+            setPadding(ui.dp(10), ui.dp(6), ui.dp(12), ui.dp(6))
+            background = cardBg()
+        }
+        card.addView(ui.icon(HudKeys.icons[idx], Palette.pink), lp(ui.dp(14), ui.dp(14)).apply { rightMargin = ui.dp(6) })
+        card.addView(tv, lp(WRAP, WRAP))
+
+        val flp = FrameLayout.LayoutParams(WRAP, WRAP).apply {
+            leftMargin = prefs.getInt("w_${key}_x", ui.dp(12))
+            topMargin = prefs.getInt("w_${key}_y", ui.dp(12) + order * ui.dp(36))
+        }
+        root.addView(card, flp)
+        widgets.add(Widget(key, tv))
+
+        card.setOnTouchListener(object : View.OnTouchListener {
+            var downX = 0f
+            var downY = 0f
+            var startX = 0
+            var startY = 0
+            override fun onTouch(v: View, e: MotionEvent): Boolean {
+                if (!editing) return false
+                val l = v.layoutParams as FrameLayout.LayoutParams
+                when (e.actionMasked) {
+                    MotionEvent.ACTION_DOWN -> {
+                        downX = e.rawX; downY = e.rawY
+                        startX = l.leftMargin; startY = l.topMargin
+                        return true
+                    }
+                    MotionEvent.ACTION_MOVE -> {
+                        l.leftMargin = (startX + e.rawX - downX).toInt().coerceIn(0, maxOf(0, root.width - v.width))
+                        l.topMargin = (startY + e.rawY - downY).toInt().coerceIn(0, maxOf(0, root.height - v.height))
+                        v.layoutParams = l
+                        return true
+                    }
+                    MotionEvent.ACTION_UP -> {
+                        prefs.edit().putInt("w_${key}_x", l.leftMargin).putInt("w_${key}_y", l.topMargin).apply()
+                        return true
+                    }
+                }
+                return false
+            }
+        })
+    }
+
+    private fun addHint(root: FrameLayout) {
+        val box = LinearLayout(ctx).apply {
+            orientation = LinearLayout.VERTICAL
+            gravity = Gravity.CENTER_HORIZONTAL
+            setPadding(ui.dp(18), ui.dp(14), ui.dp(18), ui.dp(16))
+            background = ui.rounded(Color.argb(235, 26, 16, 32), 20f, Palette.stroke)
+        }
+        box.addView(ui.text("Режим редактирования", 14f, Palette.text, true), lp(WRAP, WRAP))
+        box.addView(ui.text("Перетащи виджеты в нужное место", 12f, Palette.muted), lp(WRAP, WRAP).apply { topMargin = ui.dp(4) })
+        box.addView(
+            ui.pill("Готово", STYLE_PRIMARY) { onEditDone() },
+            lp(WRAP, WRAP).apply { topMargin = ui.dp(12) }
+        )
+        root.addView(box, FrameLayout.LayoutParams(WRAP, WRAP, Gravity.BOTTOM or Gravity.CENTER_HORIZONTAL).apply {
+            bottomMargin = ui.dp(36)
+        })
+    }
+
+    /**
+     * Крошечное окно 1x1 пиксель, которое получает событие ACTION_OUTSIDE при любом касании экрана вне него.
+     * Координат система не даёт, но факт касания виден: этого хватает для счётчика CPS (экспериментально).
+     */
+    private fun addProbe() {
+        val v = View(ctx)
+        v.setOnTouchListener { _, e ->
+            if (e.actionMasked == MotionEvent.ACTION_OUTSIDE) taps.addLast(SystemClock.elapsedRealtime())
+            false
+        }
+        val p = newParams(1, 1)
+        p.flags = WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE or
+            WindowManager.LayoutParams.FLAG_NOT_TOUCH_MODAL or
+            WindowManager.LayoutParams.FLAG_WATCH_OUTSIDE_TOUCH
+        p.x = 0
+        p.y = 0
+        try {
+            wm.addView(v, p)
+            probe = v
+        } catch (_: Exception) {
+        }
+    }
+
     private fun remove() {
         handler.removeCallbacks(ticker)
-        root?.let { try { wm.removeView(it) } catch (_: Exception) {} }
-        root = null
-        chips.clear()
+        layer?.let { try { wm.removeView(it) } catch (_: Exception) {} }
+        probe?.let { try { wm.removeView(it) } catch (_: Exception) {} }
+        layer = null
+        probe = null
+        widgets.clear()
+        taps.clear()
         stopPing()
     }
 
     private fun tick() {
-        for (c in chips) {
-            when (c.key) {
-                "time" -> c.tv.text = timeFmt.format(Date())
-                "timer" -> c.tv.text = elapsed()
-                "batt" -> c.tv.text = battery()
+        for (w in widgets) {
+            when (w.key) {
+                "time" -> w.tv.text = timeFmt.format(Date())
+                "timer" -> w.tv.text = elapsed()
+                "batt" -> w.tv.text = battery()
+                "cps" -> w.tv.text = "${cps()} CPS"
                 "ping" -> {
                     val ms = pingMs
-                    c.tv.text = if (ms < 0) "— мс" else "$ms мс"
-                    c.tv.setTextColor(
+                    w.tv.text = if (ms < 0) "— мс" else "$ms мс"
+                    w.tv.setTextColor(
                         when {
                             ms < 0 -> Palette.muted
                             ms < 60 -> Palette.ok
@@ -138,10 +244,16 @@ class HudWindow(
                         }
                     )
                 }
-                "ram" -> c.tv.text = "ОЗУ ${ramUsed()}%"
-                "net" -> c.tv.text = netSpeed()
+                "ram" -> w.tv.text = "ОЗУ ${ramUsed()}%"
+                "net" -> w.tv.text = netSpeed()
             }
         }
+    }
+
+    private fun cps(): Int {
+        val now = SystemClock.elapsedRealtime()
+        while (taps.isNotEmpty() && now - taps.peekFirst()!! > 1000) taps.removeFirst()
+        return taps.size
     }
 
     private fun elapsed(): String {
@@ -181,20 +293,36 @@ class HudWindow(
         return out
     }
 
+    /** Адрес для пинга из настроек: «хост» или «хост:порт». Пусто: Cloudflare 1.1.1.1. */
+    private fun pingTarget(): Pair<String, Int?> {
+        val raw = (prefs.getString("ping_host", "") ?: "").trim()
+            .removePrefix("https://").removePrefix("http://").substringBefore('/')
+        if (raw.isEmpty()) return Pair("1.1.1.1", 443)
+        val host = raw.substringBefore(':')
+        val port = raw.substringAfter(':', "").toIntOrNull()
+        return Pair(host, port)
+    }
+
+    private fun measure(host: String, port: Int): Int {
+        val t0 = SystemClock.elapsedRealtime()
+        return try {
+            Socket().use {
+                it.connect(InetSocketAddress(host, port), 1500)
+                (SystemClock.elapsedRealtime() - t0).toInt()
+            }
+        } catch (_: Exception) {
+            -1
+        }
+    }
+
     private fun startPing() {
         if (pingRun) return
         pingRun = true
         pingThread = Thread {
             while (pingRun) {
-                val t0 = SystemClock.elapsedRealtime()
-                var ms = -1
-                try {
-                    Socket().use {
-                        it.connect(InetSocketAddress("1.1.1.1", 443), 1500)
-                        ms = (SystemClock.elapsedRealtime() - t0).toInt()
-                    }
-                } catch (_: Exception) {
-                }
+                val (host, port) = pingTarget()
+                var ms = if (port != null) measure(host, port) else measure(host, 443)
+                if (ms < 0 && port == null) ms = measure(host, 80)
                 pingMs = ms
                 try {
                     Thread.sleep(3000)

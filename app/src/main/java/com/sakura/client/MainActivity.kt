@@ -140,7 +140,7 @@ class MainActivity : Activity() {
         content.addView(panelBtn, lp(MATCH, WRAP).apply { topMargin = ui.dp(10) })
 
         val foot = ui.text(
-            "Sakura Client v1.5  •  Zoom, Freelook и Replay — в разработке", 11f, Palette.muted
+            "Sakura Client v1.6  •  Zoom, Freelook и Replay — в разработке", 11f, Palette.muted
         ).apply { gravity = Gravity.CENTER }
         content.addView(foot, lp(MATCH, WRAP).apply { topMargin = ui.dp(26) })
         petalsBg = PetalsView(this)
@@ -166,7 +166,13 @@ class MainActivity : Activity() {
             }
             modulesBox.addView(row, lp(MATCH, WRAP).apply { if (r > 0) topMargin = ui.dp(10) })
         }
-        addModuleSettings(this, ui, prefs, modulesBox) { renderModules() }
+        addModuleSettings(this, ui, prefs, modulesBox, {
+            if (OverlayService.running) {
+                prefs.edit().putBoolean("hud_edit", true).apply()
+                toast("Перетащи виджеты в игре и нажми «Готово»")
+            } else toast("Сначала включи панель кнопкой «Играть»")
+        }) { renderModules() }
+        if (prefs.getBoolean("hud_on", false) && prefs.getBoolean("hud_ping", true)) addPingField()
     }
 
     private fun header(): View {
@@ -287,6 +293,43 @@ class MainActivity : Activity() {
             toast("Minecraft Bedrock не найден. Открываю Google Play")
             Launcher.openStore(this, Launcher.MINECRAFT)
         }
+    }
+
+    /** Поле для адреса сервера, до которого HUD мерит пинг. */
+    private fun addPingField() {
+        val box = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            setPadding(ui.dp(12), ui.dp(10), ui.dp(12), ui.dp(12))
+            background = ui.rounded(Color.argb(110, 42, 27, 52), 16f, Palette.stroke)
+        }
+        box.addView(ui.text("ПИНГ ДО СЕРВЕРА", 10.5f, Palette.pink, true).apply { letterSpacing = 0.12f }, lp(WRAP, WRAP))
+        val input = android.widget.EditText(this).apply {
+            setText(prefs.getString("ping_host", ""))
+            hint = "play.server.net или 1.2.3.4:443"
+            setHintTextColor(Palette.muted)
+            setTextColor(Palette.text)
+            setTextSize(android.util.TypedValue.COMPLEX_UNIT_PX, ui.fdp(14f))
+            setSingleLine()
+            inputType = android.text.InputType.TYPE_CLASS_TEXT or android.text.InputType.TYPE_TEXT_VARIATION_URI
+            setPadding(ui.dp(12), ui.dp(10), ui.dp(12), ui.dp(10))
+            background = ui.rounded(Palette.surface, 12f, Palette.stroke)
+            addTextChangedListener(object : android.text.TextWatcher {
+                override fun beforeTextChanged(s: CharSequence?, a: Int, b: Int, c: Int) {}
+                override fun onTextChanged(s: CharSequence?, a: Int, b: Int, c: Int) {}
+                override fun afterTextChanged(s: android.text.Editable?) {
+                    prefs.edit().putString("ping_host", s?.toString() ?: "").apply()
+                }
+            })
+        }
+        box.addView(input, lp(MATCH, WRAP).apply { topMargin = ui.dp(8) })
+        box.addView(
+            ui.text(
+                "Пусто: замер до Cloudflare. Мерится время TCP-соединения (порт 443, затем 80): " +
+                    "это задержка сети до адреса, а не игровой пинг по UDP.", 11f, Palette.muted
+            ).apply { setLineSpacing(0f, 1.1f) },
+            lp(MATCH, WRAP).apply { topMargin = ui.dp(8) }
+        )
+        modulesBox.addView(box, lp(MATCH, WRAP).apply { topMargin = ui.dp(10) })
     }
 
     private fun togglePanel() {
