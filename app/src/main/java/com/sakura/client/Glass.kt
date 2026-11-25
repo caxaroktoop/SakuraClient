@@ -15,7 +15,7 @@ import android.graphics.drawable.Drawable
 import android.widget.ScrollView
 
 /** «Стеклянный» фон панели: градиент, розовое свечение, градиентная рамка и еле заметные лепестки. */
-class GlassDrawable(private val ui: Ui, var opacity: Int) : Drawable() {
+class GlassDrawable(private val ui: Ui, private var level: Int) : Drawable() {
     private val fill = Paint(Paint.ANTI_ALIAS_FLAG)
     private val glow = Paint(Paint.ANTI_ALIAS_FLAG)
     private val border = Paint(Paint.ANTI_ALIAS_FLAG).apply { style = Paint.Style.STROKE }
@@ -23,10 +23,10 @@ class GlassDrawable(private val ui: Ui, var opacity: Int) : Drawable() {
     private val rect = RectF()
     private val clip = Path()
 
-    private fun a(base: Int) = (base * opacity / 100).coerceIn(0, 255)
+    private fun a(base: Int) = (base * level / 100).coerceIn(0, 255)
 
     fun setPanelOpacity(v: Int) {
-        opacity = v
+        level = v
         invalidateSelf()
     }
 
