@@ -29,7 +29,7 @@ import java.util.Locale
 object HudKeys {
     val keys = listOf("time", "timer", "batt", "ping", "cps", "ram", "net")
     val labels = listOf("Время", "Таймер", "Заряд", "Пинг", "CPS", "ОЗУ", "Сеть")
-    val defaults = listOf(true, true, true, true, false, false, false)
+    val defaults = listOf(false, false, false, false, false, false, false)
     val icons = listOf(
         R.drawable.ic_clock, R.drawable.ic_timer, R.drawable.ic_battery, R.drawable.ic_wifi,
         R.drawable.ic_speed, R.drawable.ic_memory, R.drawable.ic_download
@@ -74,7 +74,7 @@ class HudWindow(
     /** Пересобирает слой по текущим настройкам (или убирает, если модуль выключен). */
     fun apply() {
         remove()
-        if (prefs.getBoolean("hud_on", false)) add()
+        if (enabledIndexes().isNotEmpty() || editing) add()
     }
 
     fun setEditing(on: Boolean) {
@@ -119,21 +119,22 @@ class HudWindow(
         handler.post(ticker)
     }
 
-    private fun cardBg() = ui.rounded(
+    private fun cardBg(ui: Ui) = ui.rounded(
         Color.argb(205, 22, 13, 30), 12f,
         if (editing) Palette.pink else Palette.stroke, if (editing) 1.5f else 1f
     )
 
     private fun addWidget(root: FrameLayout, idx: Int, order: Int) {
         val key = HudKeys.keys[idx]
-        val tv = ui.text("--", 12.5f, Palette.text, true)
+        val wui = Ui(ctx, prefs.getInt("hudscale_$key", 100).coerceIn(70, 160) / 100f)
+        val tv = wui.text("--", 12.5f, Palette.text, true)
         val card = LinearLayout(ctx).apply {
             orientation = LinearLayout.HORIZONTAL
             gravity = Gravity.CENTER_VERTICAL
-            setPadding(ui.dp(10), ui.dp(6), ui.dp(12), ui.dp(6))
-            background = cardBg()
+            setPadding(wui.dp(10), wui.dp(6), wui.dp(12), wui.dp(6))
+            background = cardBg(wui)
         }
-        card.addView(ui.icon(HudKeys.icons[idx], Palette.pink), lp(ui.dp(14), ui.dp(14)).apply { rightMargin = ui.dp(6) })
+        card.addView(wui.icon(HudKeys.icons[idx], Palette.pink), lp(wui.dp(14), wui.dp(14)).apply { rightMargin = wui.dp(6) })
         card.addView(tv, lp(WRAP, WRAP))
 
         val flp = FrameLayout.LayoutParams(WRAP, WRAP).apply {

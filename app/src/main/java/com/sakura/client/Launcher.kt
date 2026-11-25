@@ -1,5 +1,6 @@
 package com.sakura.client
 
+import android.content.ClipData
 import android.content.Context
 import android.content.Intent
 import android.net.Uri
@@ -28,6 +29,26 @@ object Launcher {
             true
         } catch (e: Exception) {
             false
+        }
+    }
+
+    /** Отдаёт файл (.mcworld, .mcpack ...) Minecraft на импорт. */
+    fun openFile(ctx: Context, uri: Uri): Boolean {
+        val base = Intent(Intent.ACTION_VIEW).apply {
+            setDataAndType(uri, "application/octet-stream")
+            clipData = ClipData.newRawUri("", uri)
+            addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_ACTIVITY_NEW_TASK)
+        }
+        return try {
+            ctx.startActivity(Intent(base).setPackage(MINECRAFT))
+            true
+        } catch (e: Exception) {
+            try {
+                ctx.startActivity(Intent(base).setClassName(MINECRAFT, "com.mojang.minecraftpe.MainActivity"))
+                true
+            } catch (e2: Exception) {
+                false
+            }
         }
     }
 

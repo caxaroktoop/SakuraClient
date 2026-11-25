@@ -221,7 +221,6 @@ class OverlayService : Service() {
             return
         }
         if (key != null && key.startsWith("hud_")) hud?.apply()
-        if (key != null && key.endsWith("_on") && page == PAGE_MODULES && panel != null) fillBody()
     }
 
     // ---------- панель ----------
@@ -386,21 +385,17 @@ class OverlayService : Service() {
     }
 
     private fun buildModulesPage(b: LinearLayout, ui: Ui) {
-        val p = prefs()
-        val tiles = listOf(
-            ModuleTile(this, ui, R.drawable.ic_petal, "Лепестки", null, "petals_on", p, true),
-            ModuleTile(this, ui, R.drawable.ic_crosshair, "Прицел", null, "cross_on", p, true),
-            ModuleTile(this, ui, R.drawable.ic_clock, "HUD", null, "hud_on", p, true),
-            ModuleTile(this, ui, R.drawable.ic_moon, "Ночной", null, "dim_on", p, true)
-        )
-        tiles.chunked(2).forEachIndexed { r, pair ->
-            val row = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
-            pair.forEachIndexed { i, t ->
-                row.addView(t, lp(0, WRAP, 1f).apply { if (i > 0) leftMargin = ui.dp(8) })
+        addModulesWindow(this, ui, prefs(), b,
+            onEditHud = { prefs().edit().putBoolean("hud_edit", true).apply() },
+            extra = { key, box ->
+                if (key == "ping") {
+                    box.addView(
+                        ui.text("Адрес сервера для пинга меняется в приложении: Модули, Пинг.", 11f, Palette.muted),
+                        lp(MATCH, WRAP).apply { topMargin = ui.dp(10) }
+                    )
+                }
             }
-            b.addView(row, lp(MATCH, WRAP).apply { if (r > 0) topMargin = ui.dp(8) })
-        }
-        addModuleSettings(this, ui, p, b, { prefs().edit().putBoolean("hud_edit", true).apply() }) { fillBody() }
+        ) { fillBody() }
     }
 
     private fun buildViewPage(b: LinearLayout, ui: Ui) {
