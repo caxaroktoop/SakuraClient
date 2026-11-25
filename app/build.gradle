@@ -17,8 +17,8 @@ android {
         applicationId 'com.sakura.client'
         minSdk 23
         targetSdk 35
-        versionCode 14
-        versionName '1.4'
+        versionCode 15
+        versionName '1.5'
     }
     compileOptions {
         sourceCompatibility JavaVersion.VERSION_17

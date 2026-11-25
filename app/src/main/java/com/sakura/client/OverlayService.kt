@@ -10,9 +10,7 @@ import android.content.Intent
 import android.content.SharedPreferences
 import android.content.pm.ServiceInfo
 import android.content.res.Configuration
-import android.graphics.Canvas
 import android.graphics.Color
-import android.graphics.Paint
 import android.graphics.PixelFormat
 import android.graphics.Point
 import android.graphics.drawable.GradientDrawable
@@ -21,33 +19,48 @@ import android.os.Build
 import android.os.Handler
 import android.os.IBinder
 import android.os.Looper
+import android.os.SystemClock
 import android.util.DisplayMetrics
 import android.view.Gravity
 import android.view.MotionEvent
 import android.view.View
 import android.view.ViewConfiguration
+import android.view.ViewOutlineProvider
 import android.view.WindowManager
+import android.widget.FrameLayout
 import android.widget.ImageView
 import android.widget.LinearLayout
+import android.widget.TextView
 import android.widget.Toast
+import java.util.Locale
 import kotlin.math.abs
 
 class OverlayService : Service() {
     private lateinit var wm: WindowManager
     private val handler = Handler(Looper.getMainLooper())
-    private var crosshair: CrosshairView? = null
+    private var fx: FxView? = null
+    private var hud: HudWindow? = null
     private var bubble: ImageView? = null
     private var bubbleParams: WindowManager.LayoutParams? = null
-    private var panel: LinearLayout? = null
+    private var panel: FrameLayout? = null
     private var panelParams: WindowManager.LayoutParams? = null
-    private var panelBg: GradientDrawable? = null
+    private var panelUi: Ui? = null
+    private var glass: GlassDrawable? = null
+    private var body: LinearLayout? = null
+    private var subtitle: TextView? = null
     private var player: PlayerView? = null
     private var page = PAGE_PLAYER
     private var shown = false
+    private var startedAt = 0L
+
+    private val prefListener = SharedPreferences.OnSharedPreferenceChangeListener { _, key ->
+        handler.post { onPrefChanged(key) }
+    }
 
     private val ticker = object : Runnable {
         override fun run() {
             player?.refresh()
+            subtitle?.text = "В игре " + elapsed()
             handler.postDelayed(this, 1000)
         }
     }
@@ -55,7 +68,15 @@ class OverlayService : Service() {
     private fun prefs(): SharedPreferences = getSharedPreferences("sakura_settings", MODE_PRIVATE)
     private fun scale() = prefs().getInt("scale", 100).coerceIn(80, 140) / 100f
     private fun opacity() = prefs().getInt("opacity", 92).coerceIn(35, 100)
-    private fun panelFill() = Color.argb(opacity() * 255 / 100, 26, 16, 32)
+
+    private fun elapsed(): String {
+        val s = (SystemClock.elapsedRealtime() - startedAt) / 1000
+        val h = s / 3600
+        val m = (s % 3600) / 60
+        val sec = s % 60
+        return if (h > 0) String.format(Locale.US, "%d:%02d:%02d", h, m, sec)
+        else String.format(Locale.US, "%02d:%02d", m, sec)
+    }
 
     override fun onCreate() {
         super.onCreate()
@@ -143,12 +164,18 @@ class OverlayService : Service() {
         }
         shown = true
         running = true
+        startedAt = SystemClock.elapsedRealtime()
         val ui = Ui(this)
 
-        val cv = CrosshairView(this, prefs())
-        crosshair = cv
-        wm.addView(cv, overlayParams(WindowManager.LayoutParams.MATCH_PARENT, WindowManager.LayoutParams.MATCH_PARENT, false))
+        // нижний слой: затемнение, лепестки, прицел
+        val f = FxView(this, prefs())
+        fx = f
+        wm.addView(f, overlayParams(WindowManager.LayoutParams.MATCH_PARENT, WindowManager.LayoutParams.MATCH_PARENT, false))
 
+        // HUD сверху экрана
+        hud = HudWindow(this, wm, prefs()) { w, h -> overlayParams(w, h, false) }.also { it.apply() }
+
+        // плавающая кнопка
         val b = ImageView(this).apply {
             setImageResource(R.drawable.ic_sakura)
             val p = ui.dp(8)
@@ -173,7 +200,18 @@ class OverlayService : Service() {
                 onMoved = { x, y -> prefs().edit().putInt("bubble_x", x).putInt("bubble_y", y).apply() }
             )
         )
+
+        prefs().registerOnSharedPreferenceChangeListener(prefListener)
+        handler.removeCallbacks(ticker)
+        handler.post(ticker)
         if (prefs().getBoolean("panel_open", true)) showPanel()
+    }
+
+    private fun onPrefChanged(key: String?) {
+        if (!shown) return
+        fx?.reload()
+        if (key != null && key.startsWith("hud_")) hud?.apply()
+        if (key != null && key.endsWith("_on") && page == PAGE_MODULES && panel != null) fillBody()
     }
 
     // ---------- панель ----------
@@ -181,26 +219,58 @@ class OverlayService : Service() {
     private fun showPanel() {
         if (panel != null) return
         val ui = Ui(this, scale())
-        val v = buildPanel(ui)
-        panel = v
-        val p = panelParams ?: overlayParams(ui.dp(264), WindowManager.LayoutParams.WRAP_CONTENT, true).apply {
+        panelUi = ui
+
+        val root = FrameLayout(this)
+        val g = GlassDrawable(ui, opacity())
+        glass = g
+        root.background = g
+        root.clipToOutline = true
+        root.outlineProvider = object : ViewOutlineProvider() {
+            override fun getOutline(view: View, outline: android.graphics.Outline) {
+                outline.setRoundRect(0, 0, view.width, view.height, ui.fdp(24f))
+            }
+        }
+
+        val col = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            setPadding(ui.dp(14), ui.dp(12), ui.dp(14), ui.dp(14))
+        }
+        root.addView(col, FrameLayout.LayoutParams(MATCH, WRAP))
+        col.addView(buildHeader(ui), lp(MATCH, WRAP))
+        col.addView(buildTabs(ui), lp(MATCH, WRAP).apply { topMargin = ui.dp(10) })
+
+        val maxBody = maxOf(ui.dp(120), screenSize().y - ui.dp(170))
+        val scroll = MaxHeightScrollView(this, maxBody).apply {
+            isVerticalScrollBarEnabled = false
+            overScrollMode = View.OVER_SCROLL_NEVER
+        }
+        val b = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
+        scroll.addView(b, FrameLayout.LayoutParams(MATCH, WRAP))
+        body = b
+        col.addView(scroll, lp(MATCH, WRAP).apply { topMargin = ui.dp(12) })
+
+        panel = root
+        fillBody()
+
+        val p = panelParams ?: overlayParams(ui.dp(290), WindowManager.LayoutParams.WRAP_CONTENT, true).apply {
             x = prefs().getInt("panel_x", Ui(this@OverlayService).dp(70))
             y = prefs().getInt("panel_y", Ui(this@OverlayService).dp(40))
         }
-        p.width = ui.dp(264)
+        p.width = ui.dp(290)
+        p.height = WindowManager.LayoutParams.WRAP_CONTENT
         panelParams = p
-        wm.addView(v, p)
-        handler.removeCallbacks(ticker)
-        handler.post(ticker)
-        v.post { clamp(panel, panelParams) }
+        wm.addView(root, p)
+        root.post { clamp(panel, panelParams) }
     }
 
     private fun removePanelView() {
-        handler.removeCallbacks(ticker)
         panel?.let { try { wm.removeView(it) } catch (_: Exception) {} }
         panel = null
         player = null
-        panelBg = null
+        body = null
+        subtitle = null
+        glass = null
     }
 
     private fun hidePanel() {
@@ -221,34 +291,18 @@ class OverlayService : Service() {
         try { wm.updateViewLayout(view, p) } catch (_: Exception) {}
     }
 
-    private fun buildPanel(ui: Ui): LinearLayout {
-        val root = LinearLayout(this).apply {
-            orientation = LinearLayout.VERTICAL
-            setPadding(ui.dp(12), ui.dp(10), ui.dp(12), ui.dp(12))
-        }
-        val bg = ui.rounded(panelFill(), 20f, Palette.stroke)
-        panelBg = bg
-        root.background = bg
-
-        root.addView(buildHeader(ui), lp(MATCH, WRAP))
-        if (page == PAGE_PLAYER) buildPlayerPage(root, ui) else buildSettingsPage(root, ui)
-        return root
-    }
-
     private fun buildHeader(ui: Ui): LinearLayout {
         val h = LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL
             gravity = Gravity.CENTER_VERTICAL
         }
-        h.addView(ui.icon(R.drawable.ic_sakura), lp(ui.dp(22), ui.dp(22)).apply { rightMargin = ui.dp(8) })
-        h.addView(ui.text("Sakura", 15f, Palette.pink, true), lp(0, WRAP, 1f))
-        val settingsActive = page == PAGE_SETTINGS
-        h.addView(
-            ui.iconButton(R.drawable.ic_tune, 34f, 18f, if (settingsActive) Palette.pink else Palette.muted) {
-                page = if (page == PAGE_PLAYER) PAGE_SETTINGS else PAGE_PLAYER
-                rebuildPanel()
-            }, lp(ui.dp(34), ui.dp(34))
-        )
+        h.addView(ui.icon(R.drawable.ic_sakura), lp(ui.dp(30), ui.dp(30)).apply { rightMargin = ui.dp(10) })
+        val titles = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
+        titles.addView(ui.text("Sakura", 16f, Palette.text, true), lp(WRAP, WRAP))
+        val sub = ui.text("В игре " + elapsed(), 11f, Palette.pink)
+        subtitle = sub
+        titles.addView(sub, lp(WRAP, WRAP).apply { topMargin = ui.dp(3) })
+        h.addView(titles, lp(0, WRAP, 1f))
         h.addView(
             ui.iconButton(R.drawable.ic_close, 34f, 16f, Palette.muted) { hidePanel() },
             lp(ui.dp(34), ui.dp(34))
@@ -263,95 +317,101 @@ class OverlayService : Service() {
         return h
     }
 
-    private fun buildPlayerPage(root: LinearLayout, ui: Ui) {
-        val pv = PlayerView(this, ui, 52f) { openApp(Launcher.SPOTIFY, "Spotify") }
-        player = pv
-        root.addView(pv, lp(MATCH, WRAP).apply { topMargin = ui.dp(10) })
-        pv.refresh()
-
-        val row = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
-        row.addView(
-            ui.pill("Minecraft", STYLE_GHOST, R.drawable.ic_cube) { openApp(Launcher.MINECRAFT, "Minecraft") },
-            lp(0, WRAP, 1f)
+    private fun buildTabs(ui: Ui): LinearLayout {
+        val bar = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            setPadding(ui.dp(3), ui.dp(3), ui.dp(3), ui.dp(3))
+            background = ui.rounded(Color.argb(110, 0, 0, 0), 14f)
+        }
+        val tabs = listOf(
+            Triple(PAGE_PLAYER, R.drawable.ic_music, "Плеер"),
+            Triple(PAGE_MODULES, R.drawable.ic_grid, "Модули"),
+            Triple(PAGE_VIEW, R.drawable.ic_tune, "Вид")
         )
-        root.addView(row, lp(MATCH, WRAP).apply { topMargin = ui.dp(10) })
+        for ((id, ic, label) in tabs) {
+            val sel = id == page
+            val fg = if (sel) Palette.onPink else Palette.muted
+            val tab = LinearLayout(this).apply {
+                orientation = LinearLayout.HORIZONTAL
+                gravity = Gravity.CENTER
+                setPadding(0, ui.dp(8), 0, ui.dp(8))
+                if (sel) background = ui.gradient(Palette.pink, Palette.pinkDeep, 11f, GradientDrawable.Orientation.LEFT_RIGHT)
+                isClickable = true
+                setOnClickListener {
+                    if (page != id) {
+                        page = id
+                        rebuildPanel()
+                    }
+                }
+            }
+            tab.addView(ui.icon(ic, fg), lp(ui.dp(14), ui.dp(14)).apply { rightMargin = ui.dp(5) })
+            tab.addView(ui.text(label, 12f, fg, true))
+            bar.addView(tab, lp(0, WRAP, 1f))
+        }
+        return bar
+    }
+
+    private fun fillBody() {
+        val b = body ?: return
+        val ui = panelUi ?: return
+        b.removeAllViews()
+        player = null
+        when (page) {
+            PAGE_PLAYER -> buildPlayerPage(b, ui)
+            PAGE_MODULES -> buildModulesPage(b, ui)
+            else -> buildViewPage(b, ui)
+        }
+        panel?.post { clamp(panel, panelParams) }
+    }
+
+    private fun buildPlayerPage(b: LinearLayout, ui: Ui) {
+        val pv = PlayerView(this, ui, 56f) { openApp(Launcher.SPOTIFY, "Spotify") }
+        player = pv
+        b.addView(pv, lp(MATCH, WRAP))
+        pv.refresh()
+        b.addView(
+            ui.pill("Открыть Minecraft", STYLE_GHOST, R.drawable.ic_cube) { openApp(Launcher.MINECRAFT, "Minecraft") },
+            lp(MATCH, WRAP).apply { topMargin = ui.dp(12) }
+        )
+    }
+
+    private fun buildModulesPage(b: LinearLayout, ui: Ui) {
+        val p = prefs()
+        val tiles = listOf(
+            ModuleTile(this, ui, R.drawable.ic_petal, "Лепестки", null, "petals_on", p, true),
+            ModuleTile(this, ui, R.drawable.ic_crosshair, "Прицел", null, "cross_on", p, true),
+            ModuleTile(this, ui, R.drawable.ic_clock, "HUD", null, "hud_on", p, true),
+            ModuleTile(this, ui, R.drawable.ic_moon, "Ночной", null, "dim_on", p, true)
+        )
+        tiles.chunked(2).forEachIndexed { r, pair ->
+            val row = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
+            pair.forEachIndexed { i, t ->
+                row.addView(t, lp(0, WRAP, 1f).apply { if (i > 0) leftMargin = ui.dp(8) })
+            }
+            b.addView(row, lp(MATCH, WRAP).apply { if (r > 0) topMargin = ui.dp(8) })
+        }
+        addModuleSettings(this, ui, p, b) { fillBody() }
+    }
+
+    private fun buildViewPage(b: LinearLayout, ui: Ui) {
+        addSliderRow(this, ui, b, "Прозрачность панели", 35, 100, opacity(), "%",
+            onChange = { v ->
+                prefs().edit().putInt("opacity", v).apply()
+                glass?.setPanelOpacity(v)
+            }, onDone = {})
+        addSliderRow(this, ui, b, "Размер панели", 80, 140, (scale() * 100).toInt(), "%",
+            onChange = { v -> prefs().edit().putInt("scale", v).apply() },
+            onDone = { rebuildPanel() })
+        b.addView(
+            ui.pill("Выключить Sakura", STYLE_DANGER, R.drawable.ic_close) { stopSelf() },
+            lp(MATCH, WRAP).apply { topMargin = ui.dp(16) }
+        )
     }
 
     private fun openApp(pkg: String, name: String) {
         if (!Launcher.open(this, pkg)) {
             Toast.makeText(this, "$name не найден", Toast.LENGTH_SHORT).show()
         }
-    }
-
-    private fun sliderRow(
-        parent: LinearLayout, ui: Ui, label: String, min: Int, max: Int, cur: Int, unit: String,
-        onChange: (Int) -> Unit, onDone: (Int) -> Unit
-    ) {
-        val row = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
-        row.addView(ui.text(label, 12f, Palette.muted), lp(0, WRAP, 1f))
-        val value = ui.text("$cur$unit", 12f, Palette.text, true)
-        row.addView(value, lp(WRAP, WRAP))
-        parent.addView(row, lp(MATCH, WRAP).apply { topMargin = ui.dp(10) })
-        parent.addView(
-            SliderView(this, ui, min, max, cur, { v -> value.text = "$v$unit"; onChange(v) }, onDone),
-            lp(MATCH, WRAP)
-        )
-    }
-
-    private fun buildSettingsPage(root: LinearLayout, ui: Ui) {
-        sliderRow(root, ui, "Прозрачность панели", 35, 100, opacity(), "%",
-            onChange = { v ->
-                prefs().edit().putInt("opacity", v).apply()
-                panelBg?.setColor(panelFill())
-            }, onDone = {})
-        sliderRow(root, ui, "Размер панели", 80, 140, (scale() * 100).toInt(), "%",
-            onChange = { v -> prefs().edit().putInt("scale", v).apply() },
-            onDone = { rebuildPanel() })
-
-        root.addView(View(this).apply { setBackgroundColor(Palette.stroke) },
-            lp(MATCH, maxOf(1, ui.dp(1))).apply { topMargin = ui.dp(10); bottomMargin = ui.dp(2) })
-
-        val crossRow = LinearLayout(this).apply {
-            orientation = LinearLayout.HORIZONTAL
-            gravity = Gravity.CENTER_VERTICAL
-        }
-        crossRow.addView(ui.text("Свой прицел", 13f, Palette.text, true), lp(0, WRAP, 1f))
-        crossRow.addView(
-            ToggleView(this, ui, prefs().getBoolean("cross_on", false)) { on ->
-                prefs().edit().putBoolean("cross_on", on).apply()
-                crosshair?.reload()
-            }, lp(WRAP, WRAP)
-        )
-        root.addView(crossRow, lp(MATCH, WRAP).apply { topMargin = ui.dp(8) })
-
-        sliderRow(root, ui, "Размер прицела", 8, 48, prefs().getInt("cross_size", 20), "",
-            onChange = { v ->
-                prefs().edit().putInt("cross_size", v).apply()
-                crosshair?.reload()
-            }, onDone = {})
-
-        val sel = prefs().getInt("cross_color", 0)
-        val colors = LinearLayout(this).apply {
-            orientation = LinearLayout.HORIZONTAL
-            gravity = Gravity.CENTER_VERTICAL
-        }
-        CrosshairView.COLORS.forEachIndexed { i, col ->
-            val dot = View(this).apply {
-                background = ui.circle(col).apply { if (i == sel) setStroke(ui.dp(2), Color.WHITE) }
-                setOnClickListener {
-                    prefs().edit().putInt("cross_color", i).apply()
-                    crosshair?.reload()
-                    rebuildPanel()
-                }
-            }
-            colors.addView(dot, lp(ui.dp(26), ui.dp(26)).apply { rightMargin = ui.dp(10) })
-        }
-        root.addView(colors, lp(MATCH, WRAP).apply { topMargin = ui.dp(6) })
-
-        root.addView(
-            ui.pill("Выключить Sakura", STYLE_DANGER, R.drawable.ic_close) { stopSelf() },
-            lp(MATCH, WRAP).apply { topMargin = ui.dp(14) }
-        )
     }
 
     override fun onConfigurationChanged(newConfig: Configuration) {
@@ -361,11 +421,15 @@ class OverlayService : Service() {
     }
 
     override fun onDestroy() {
+        handler.removeCallbacks(ticker)
+        try { prefs().unregisterOnSharedPreferenceChangeListener(prefListener) } catch (_: Exception) {}
         removePanelView()
+        hud?.destroy()
+        hud = null
         try { bubble?.let { wm.removeView(it) } } catch (_: Exception) {}
-        try { crosshair?.let { wm.removeView(it) } } catch (_: Exception) {}
+        try { fx?.let { wm.removeView(it) } } catch (_: Exception) {}
         bubble = null
-        crosshair = null
+        fx = null
         shown = false
         running = false
         if (Build.VERSION.SDK_INT >= 24) stopForeground(STOP_FOREGROUND_REMOVE)
@@ -380,7 +444,8 @@ class OverlayService : Service() {
         private const val CHANNEL = "sakura_overlay"
         private const val NOTIF_ID = 1301
         private const val PAGE_PLAYER = 0
-        private const val PAGE_SETTINGS = 1
+        private const val PAGE_MODULES = 1
+        private const val PAGE_VIEW = 2
 
         @Volatile
         var running = false
@@ -433,54 +498,5 @@ class DragListener(
             MotionEvent.ACTION_CANCEL -> return true
         }
         return false
-    }
-}
-
-/** Прицел по центру экрана. Тёмная обводка делает его заметным на любом фоне. */
-class CrosshairView(ctx: Context, private val prefs: SharedPreferences) : View(ctx) {
-    private var on = false
-    private var armDp = 20
-    private var colorIdx = 0
-    private val paint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
-        style = Paint.Style.STROKE
-        strokeCap = Paint.Cap.ROUND
-    }
-
-    init { reload() }
-
-    fun reload() {
-        on = prefs.getBoolean("cross_on", false)
-        armDp = prefs.getInt("cross_size", 20)
-        colorIdx = prefs.getInt("cross_color", 0).coerceIn(0, COLORS.size - 1)
-        invalidate()
-    }
-
-    override fun onDraw(canvas: Canvas) {
-        if (!on) return
-        val d = resources.displayMetrics.density
-        val x = width / 2f
-        val y = height / 2f
-        val gap = 4f * d
-        val arm = armDp * d
-        val w = 2.5f * d
-        for (pass in 0..1) {
-            paint.style = Paint.Style.STROKE
-            paint.strokeWidth = if (pass == 0) w + 2f * d else w
-            paint.color = if (pass == 0) Color.argb(150, 0, 0, 0) else COLORS[colorIdx]
-            canvas.drawLine(x - arm, y, x - gap, y, paint)
-            canvas.drawLine(x + gap, y, x + arm, y, paint)
-            canvas.drawLine(x, y - arm, x, y - gap, paint)
-            canvas.drawLine(x, y + gap, x, y + arm, paint)
-        }
-        paint.style = Paint.Style.FILL
-        paint.color = COLORS[colorIdx]
-        canvas.drawCircle(x, y, 1.8f * d, paint)
-    }
-
-    companion object {
-        val COLORS = intArrayOf(
-            Color.rgb(255, 105, 180), Color.WHITE, Color.rgb(120, 220, 255),
-            Color.rgb(180, 255, 150), Color.rgb(255, 224, 102), Color.rgb(255, 90, 90)
-        )
     }
 }

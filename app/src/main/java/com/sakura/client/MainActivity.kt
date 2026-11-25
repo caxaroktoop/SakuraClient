@@ -3,6 +3,7 @@ package com.sakura.client
 import android.Manifest
 import android.app.Activity
 import android.content.Intent
+import android.content.SharedPreferences
 import android.content.pm.PackageManager
 import android.graphics.Color
 import android.graphics.drawable.GradientDrawable
@@ -30,6 +31,12 @@ class MainActivity : Activity() {
     private var notifStatus: TextView? = null
     private lateinit var mcStatus: TextView
     private lateinit var panelBtn: LinearLayout
+    private lateinit var petalsBg: PetalsView
+    private lateinit var modulesBox: LinearLayout
+    private val prefs: SharedPreferences by lazy { getSharedPreferences("sakura_settings", MODE_PRIVATE) }
+    private val prefListener = SharedPreferences.OnSharedPreferenceChangeListener { _, key ->
+        if (key != null && key.endsWith("_on")) handler.post { renderModules() }
+    }
 
     private val ticker = object : Runnable {
         override fun run() {
@@ -51,10 +58,14 @@ class MainActivity : Activity() {
         super.onResume()
         handler.removeCallbacks(ticker)
         handler.post(ticker)
+        prefs.registerOnSharedPreferenceChangeListener(prefListener)
+        petalsBg.start()
     }
 
     override fun onPause() {
         handler.removeCallbacks(ticker)
+        prefs.unregisterOnSharedPreferenceChangeListener(prefListener)
+        petalsBg.stop()
         super.onPause()
     }
 
@@ -63,7 +74,6 @@ class MainActivity : Activity() {
     @Suppress("DEPRECATION")
     private fun build(): View {
         val scroll = ScrollView(this).apply {
-            setBackgroundColor(Palette.bg)
             isVerticalScrollBarEnabled = false
             clipToPadding = false
         }
@@ -88,6 +98,15 @@ class MainActivity : Activity() {
         player = PlayerView(this, ui, 64f) { openApp(Launcher.SPOTIFY, "Spotify") }
         spotifyCard.addView(player, lp(MATCH, WRAP))
         content.addView(spotifyCard, lp(MATCH, WRAP).apply { topMargin = ui.dp(10) })
+
+        content.addView(sectionTitle("МОДУЛИ"), lp(MATCH, WRAP).apply { topMargin = ui.dp(24) })
+        modulesBox = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
+        renderModules()
+        content.addView(modulesBox, lp(MATCH, WRAP).apply { topMargin = ui.dp(10) })
+        content.addView(
+            ui.text("Модули работают поверх игры, пока включена панель Sakura.", 11f, Palette.muted),
+            lp(MATCH, WRAP).apply { topMargin = ui.dp(10); leftMargin = ui.dp(4) }
+        )
 
         content.addView(sectionTitle("НАСТРОЙКА"), lp(MATCH, WRAP).apply { topMargin = ui.dp(24) })
         val setup = card()
@@ -121,10 +140,33 @@ class MainActivity : Activity() {
         content.addView(panelBtn, lp(MATCH, WRAP).apply { topMargin = ui.dp(10) })
 
         val foot = ui.text(
-            "Sakura Client v1.4  •  Zoom, Freelook и Replay — в разработке", 11f, Palette.muted
+            "Sakura Client v1.5  •  Zoom, Freelook и Replay — в разработке", 11f, Palette.muted
         ).apply { gravity = Gravity.CENTER }
         content.addView(foot, lp(MATCH, WRAP).apply { topMargin = ui.dp(26) })
-        return scroll
+        petalsBg = PetalsView(this)
+        val frame = FrameLayout(this).apply { setBackgroundColor(Palette.bg) }
+        frame.addView(scroll, FrameLayout.LayoutParams(MATCH, MATCH))
+        frame.addView(petalsBg, FrameLayout.LayoutParams(MATCH, MATCH))
+        return frame
+    }
+
+    /** Плитки модулей + настройки включённых. Перерисовывается при включении/выключении. */
+    private fun renderModules() {
+        modulesBox.removeAllViews()
+        val tiles = listOf(
+            ModuleTile(this, ui, R.drawable.ic_petal, "Сакура поверх игры", "Живые лепестки падают на экране", "petals_on", prefs),
+            ModuleTile(this, ui, R.drawable.ic_crosshair, "Свой прицел", "4 стиля, цвет и размер", "cross_on", prefs),
+            ModuleTile(this, ui, R.drawable.ic_clock, "HUD", "Время, таймер, заряд, пинг, ОЗУ, сеть", "hud_on", prefs),
+            ModuleTile(this, ui, R.drawable.ic_moon, "Ночной режим", "Затемнение и тёплый оттенок", "dim_on", prefs)
+        )
+        tiles.chunked(2).forEachIndexed { r, pair ->
+            val row = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
+            pair.forEachIndexed { i, t ->
+                row.addView(t, lp(0, MATCH, 1f).apply { if (i > 0) leftMargin = ui.dp(10) })
+            }
+            modulesBox.addView(row, lp(MATCH, WRAP).apply { if (r > 0) topMargin = ui.dp(10) })
+        }
+        addModuleSettings(this, ui, prefs, modulesBox) { renderModules() }
     }
 
     private fun header(): View {
