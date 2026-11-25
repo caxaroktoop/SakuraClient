@@ -233,7 +233,11 @@ class MainActivity : Activity() {
         content.addView(panelBtn, lp(MATCH, WRAP).apply { topMargin = ui.dp(10) })
 
         content.addView(
-            ui.text("Sakura Client v1.9  •  Freelook и Replay — в разработке", 11f, Palette.muted)
+            ui.pill("Диагностика Minecraft", STYLE_GHOST, R.drawable.ic_cube) { showDiagnostics() },
+            lp(MATCH, WRAP).apply { topMargin = ui.dp(10) }
+        )
+        content.addView(
+            ui.text("Sakura Client v1.10  •  Freelook и Replay — в разработке", 11f, Palette.muted)
                 .apply { gravity = Gravity.CENTER },
             lp(MATCH, WRAP).apply { topMargin = ui.dp(26) }
         )
@@ -706,6 +710,28 @@ class MainActivity : Activity() {
         if (Build.VERSION.SDK_INT >= 33 &&
             checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED
         ) requestPermissions(arrayOf(Manifest.permission.POST_NOTIFICATIONS), 11)
+    }
+
+    private fun showDiagnostics() {
+        val text = Diagnostics.run(this)
+        val tv = TextView(this).apply {
+            this.text = text
+            typeface = android.graphics.Typeface.MONOSPACE
+            setTextIsSelectable(true)
+            setTextSize(android.util.TypedValue.COMPLEX_UNIT_SP, 11f)
+            setPadding(ui.dp(16), ui.dp(8), ui.dp(16), ui.dp(8))
+        }
+        val sv = ScrollView(this).apply { addView(tv) }
+        AlertDialog.Builder(this)
+            .setTitle("Диагностика")
+            .setView(sv)
+            .setPositiveButton("Копировать") { _, _ ->
+                val cm = getSystemService(CLIPBOARD_SERVICE) as android.content.ClipboardManager
+                cm.setPrimaryClip(android.content.ClipData.newPlainText("sakura", text))
+                toast("Скопировано")
+            }
+            .setNegativeButton("Закрыть", null)
+            .show()
     }
 
     private fun toast(m: String) = Toast.makeText(this, m, Toast.LENGTH_SHORT).show()
