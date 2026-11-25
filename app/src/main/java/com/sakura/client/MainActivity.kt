@@ -237,7 +237,11 @@ class MainActivity : Activity() {
             lp(MATCH, WRAP).apply { topMargin = ui.dp(10) }
         )
         content.addView(
-            ui.text("Sakura Client v1.10  •  Freelook и Replay — в разработке", 11f, Palette.muted)
+            ui.pill("Эксперимент: тест загрузки Minecraft", STYLE_GHOST, R.drawable.ic_cube) { runLoadTest() },
+            lp(MATCH, WRAP).apply { topMargin = ui.dp(10) }
+        )
+        content.addView(
+            ui.text("Sakura Client v1.11  •  Freelook и Replay — в разработке", 11f, Palette.muted)
                 .apply { gravity = Gravity.CENTER },
             lp(MATCH, WRAP).apply { topMargin = ui.dp(26) }
         )
@@ -712,8 +716,26 @@ class MainActivity : Activity() {
         ) requestPermissions(arrayOf(Manifest.permission.POST_NOTIFICATIONS), 11)
     }
 
-    private fun showDiagnostics() {
-        val text = Diagnostics.run(this)
+    private fun showDiagnostics() = showText("Диагностика", Diagnostics.run(this))
+
+    private fun runLoadTest() {
+        LoadTestService.reportFile(this).delete()
+        try {
+            startService(Intent(this, LoadTestService::class.java))
+        } catch (e: Exception) {
+            toast("Не удалось запустить тест")
+            return
+        }
+        toast("Тест идёт, подожди 8 секунд…")
+        handler.postDelayed({
+            val f = LoadTestService.reportFile(this)
+            var t = if (f.exists()) f.readText() else "Отчёта нет: процесс теста не стартовал."
+            if (!t.contains("КОНЕЦ")) t += "\n(Процесс остановился раньше конца: вероятно, упал на последнем шаге выше.)"
+            showText("Тест загрузки", t)
+        }, 8000)
+    }
+
+    private fun showText(title: String, text: String) {
         val tv = TextView(this).apply {
             this.text = text
             typeface = android.graphics.Typeface.MONOSPACE
@@ -723,7 +745,7 @@ class MainActivity : Activity() {
         }
         val sv = ScrollView(this).apply { addView(tv) }
         AlertDialog.Builder(this)
-            .setTitle("Диагностика")
+            .setTitle(title)
             .setView(sv)
             .setPositiveButton("Копировать") { _, _ ->
                 val cm = getSystemService(CLIPBOARD_SERVICE) as android.content.ClipboardManager
