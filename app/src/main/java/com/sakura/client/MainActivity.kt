@@ -42,6 +42,7 @@ class MainActivity : Activity() {
     private lateinit var mcStatus: TextView
     private lateinit var panelBtn: LinearLayout
     private lateinit var petalsBg: PetalsView
+    private lateinit var liveBg: LiveBackground
     private lateinit var modulesBox: LinearLayout
     private lateinit var libBox: LinearLayout
     private lateinit var pages: List<View>
@@ -71,11 +72,13 @@ class MainActivity : Activity() {
         handler.removeCallbacks(ticker)
         handler.post(ticker)
         petalsBg.start()
+        liveBg.start()
     }
 
     override fun onPause() {
         handler.removeCallbacks(ticker)
         petalsBg.stop()
+        liveBg.stop()
         super.onPause()
     }
 
@@ -96,8 +99,10 @@ class MainActivity : Activity() {
             insets
         }
 
-        petalsBg = PetalsView(this)
+        petalsBg = PetalsView(this).apply { configure(26, 1f) }
+        liveBg = LiveBackground(this)
         val outer = FrameLayout(this).apply { setBackgroundColor(Palette.bg) }
+        outer.addView(liveBg, FrameLayout.LayoutParams(MATCH, MATCH))
         outer.addView(root, FrameLayout.LayoutParams(MATCH, MATCH))
         outer.addView(petalsBg, FrameLayout.LayoutParams(MATCH, MATCH))
         selectTab(0)
@@ -228,7 +233,7 @@ class MainActivity : Activity() {
         content.addView(panelBtn, lp(MATCH, WRAP).apply { topMargin = ui.dp(10) })
 
         content.addView(
-            ui.text("Sakura Client v1.8  •  Freelook и Replay — в разработке", 11f, Palette.muted)
+            ui.text("Sakura Client v1.9  •  Freelook и Replay — в разработке", 11f, Palette.muted)
                 .apply { gravity = Gravity.CENTER },
             lp(MATCH, WRAP).apply { topMargin = ui.dp(26) }
         )

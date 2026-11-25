@@ -271,7 +271,7 @@ class ClickGuiView(private val e: GuiEnv) : LinearLayout(e.c) {
         val row = LinearLayout(c).apply { orientation = HORIZONTAL; gravity = Gravity.CENTER_VERTICAL }
         row.addView(ui.icon(R.drawable.ic_sakura), lp(ui.dp(26), ui.dp(26)))
         row.addView(ui.text("SAKURA", 15f, Gui.text, true), lp(WRAP, WRAP).apply { leftMargin = ui.dp(8) })
-        row.addView(ui.text("v1.8 · beta", 10.5f, Gui.muted), lp(WRAP, WRAP).apply { leftMargin = ui.dp(8) })
+        row.addView(ui.text("v1.9 · beta", 10.5f, Gui.muted), lp(WRAP, WRAP).apply { leftMargin = ui.dp(8) })
         if (e.showSearch && e.wide) {
             row.addView(searchBox(), lp(0, WRAP, 1f).apply { leftMargin = ui.dp(14); rightMargin = ui.dp(10) })
         } else {
